@@ -20,8 +20,8 @@ type ResponseMessageType string
 
 const (
 	ResponseConnectionEstablished ResponseMessageType = "ConnectionEstablished" // Sent to client on successful connection with assigned UUID
-	ResponseExportStatus          ResponseMessageType = "ExportStatus"
-	ResponseKeepAlive             ResponseMessageType = "KeepAlive"
+	ResponseExportStatus          ResponseMessageType = "ExportStatus"          // Sent to clients when export status changes (payload is boolean: true=running, false=stopped)
+	ResponseKeepAlive             ResponseMessageType = "KeepAlive"             // Sent to client in response to KeepAlive message (payload can be "Pong" or empty)
 )
 
 type ResponseMessage struct {
