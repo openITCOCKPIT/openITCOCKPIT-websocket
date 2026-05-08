@@ -40,18 +40,21 @@ func (c *Connection) ReadPump() {
 		return nil
 	})
 	for {
-		var msg Message
+		var msg IncomingMessage
 		if err := c.Ws.ReadJSON(&msg); err != nil {
 			log.Println("read error:", err)
 			break
 		}
 		// Hier ggf. Nachrichtenverarbeitung
-		fmt.Println(msg)
+		fmt.Println("Nachricht empfangen:", msg)
 
-		switch msg.Task {
-		case TypeKeepAlive:
+		switch msg.Type {
+		case IncomingKeepAlive:
 			// KeepAlive message - respond with "Pong"
-			response := ResponseMessage{Type: TypeKeepAlive, Message: "Pong"}
+			response := ResponseMessage{
+				Type:    ResponseKeepAlive,
+				Message: "Pong",
+			}
 			c.Send <- response
 		}
 	}

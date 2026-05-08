@@ -27,6 +27,10 @@ func main() {
 	h := hub.NewHub()
 	go h.Run()
 
+	// ExportWatcher starten (nutzt Hub als Broadcaster)
+	exportWatcher := db.NewExportWatcher(dbConn, h)
+	exportWatcher.Start()
+
 	// WebHook-Gateways können hier konfiguriert werden
 	gateways := []string{
 		// "https://example.com/webhook"
@@ -49,6 +53,9 @@ func main() {
 
 	<-shutdownCtx.Done()
 	log.Println("Shutdown signal received")
+
+	// ExportWatcher stoppen
+	exportWatcher.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

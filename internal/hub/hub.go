@@ -4,30 +4,35 @@ import (
 	"sync"
 )
 
-type MessageType string
+type IncomingMessageType string
 
 const (
-	TypeConnection MessageType = "connection" // Response from the WebSocket server on successful connection
-	TypeMessage    MessageType = "message"    // General message the WebSocket client should handle
-	TypeKeepAlive  MessageType = "keepAlive"  // Optional: for WebSocket clients to keep the connection alive
+	IncomingKeepAlive IncomingMessageType = "KeepAlive" //  WebSocket clients to keep the connection alive
 )
 
-type Message struct {
-	Task MessageType `json:"task"`
-	Key  string      `json:"key"`
-	UUID string      `json:"uuid"`
-	Data any         `json:"data"`
+type IncomingMessage struct {
+	Type    IncomingMessageType `json:"task"`
+	Message string              `json:"message"`
+	Payload any                 `json:"payload"`
 }
 
+type ResponseMessageType string
+
+const (
+	ResponseConnectionEstablished ResponseMessageType = "ConnectionEstablished" // Sent to client on successful connection with assigned UUID
+	ResponseExportStatus          ResponseMessageType = "ExportStatus"
+	ResponseKeepAlive             ResponseMessageType = "KeepAlive"
+)
+
 type ResponseMessage struct {
-	Type    MessageType `json:"type"`
-	Message string      `json:"message"`
-	Data    any         `json:"data,omitempty"`
+	Type    ResponseMessageType `json:"type"`
+	Message string              `json:"message"`
+	Payload any                 `json:"payload"`
 }
 
 type ClientInfo struct {
 	UUID   string
-	UserID string
+	UserID int64
 }
 
 type Hub struct {
@@ -102,7 +107,7 @@ func (h *Hub) Broadcast(msg ResponseMessage) {
 }
 
 // Send targeted message
-func (h *Hub) SendToUser(userID string, msg ResponseMessage) {
+func (h *Hub) SendToUser(userID int64, msg ResponseMessage) {
 	h.clientsMutex.RLock()
 	for c, info := range h.clients {
 		if info.UserID == userID {

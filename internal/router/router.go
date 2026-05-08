@@ -1,12 +1,14 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"push_notification/internal/db"
 	"push_notification/internal/hub"
 	"push_notification/internal/webhook"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -23,6 +25,8 @@ func NewRouter(h *hub.Hub, wh *webhook.WebHookService, dbConn *db.DB) http.Handl
 	r := &Router{hub: h, webhook: wh, db: dbConn}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", r.handleWebSocket)
+
+	// The "z" is a cloud-native Kubernetes convention for a simple health check endpoint. It can be used by Kubernetes liveness/readiness probes.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -33,7 +37,7 @@ func NewRouter(h *hub.Hub, wh *webhook.WebHookService, dbConn *db.DB) http.Handl
 
 // MessageInputPayload ist das erwartete JSON für /message
 type MessageInputPayload struct {
-	UserID  string      `json:"user_id"`
+	UserID  int64       `json:"user_id"`
 	Type    string      `json:"type"`
 	Data    interface{} `json:"data"`
 	WebHook bool        `json:"webhook,omitempty"` // Optional: explizit an WebHook senden
@@ -51,10 +55,13 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	msg := hub.ResponseMessage{Type: hub.MessageType(payload.Type), Message: "", Data: payload.Data}
+
+	// FIXME!!
+	//msg := hub.ResponseMessage{Type: hub.MessageType(payload.Type), Message: "", Data: payload.Data}
+	msg := hub.ResponseMessage{}
 	if payload.WebHook && r.webhook != nil {
 		go r.webhook.Send(msg)
-	} else if payload.UserID != "" {
+	} else if payload.UserID > 0 {
 		r.hub.SendToUser(payload.UserID, msg)
 	} else {
 		r.hub.Broadcast(msg)
@@ -63,73 +70,90 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-type handshakePayload struct {
-	Task string `json:"task"`
-	Key  string `json:"key"`
-	UUID string `json:"uuid"`
-	Data struct {
-		UserID      int64  `json:"userId"`
-		BrowserUUID string `json:"browserUuid"`
-	} `json:"data"`
-}
-
+// handleWebSocket handles the incoming WebSocket connection.
 func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
+	// For authentication, the Client send an API key as a subprotocol during the WebSocket handshake. (HTTP Header)
+	// Sec-WebSocket-Protocol: access_token, <API_KEY>
 	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
+		CheckOrigin:  func(r *http.Request) bool { return true },
+		Subprotocols: []string{"access_token"},
 	}
-	ws, err := upgrader.Upgrade(w, req, nil)
+
+	// The userId is expected as a query parameter in the WebSocket URL, e.g. ws://localhost:8083/?userId=123
+	userIdStr := req.URL.Query().Get("userId")
+	userId, err := strconv.ParseInt(userIdStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract subprotocol (API key) from the request header
+	var apiKey string
+	requestedProtocols := websocket.Subprotocols(req)
+	if len(requestedProtocols) == 2 && requestedProtocols[0] == "access_token" {
+		apiKey = requestedProtocols[1]
+	}
+
+	if apiKey == "" || userId <= 0 || !r.isValid(apiKey, req.Context()) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// We have to tell the browser which subprotocol we accepted (in this case "access_token")
+	// This is mandatory!
+	header := http.Header{}
+	header.Set("Sec-WebSocket-Protocol", requestedProtocols[0]) // We accepted "access_token"
+
+	ws, err := upgrader.Upgrade(w, req, header)
 	if err != nil {
 		log.Println("Upgrade error:", err)
 		return
 	}
 
-	// onOpen: Begrüßungsnachricht sofort senden, UUID generieren
+	defer ws.Close()
+
 	assignedUUID := uuid.NewString()
-	openMsg := map[string]interface{}{
-		"type":    hub.TypeConnection,
-		"message": "Connection established successfully",
-		"data": map[string]string{
-			"uuid": assignedUUID,
+	welcomeMsg := hub.ResponseMessage{
+		Type:    hub.ResponseConnectionEstablished,
+		Message: "Connection established successfully",
+		Payload: map[string]string{
+			"clientUuid": assignedUUID,
 		},
 	}
-	if err := ws.WriteJSON(openMsg); err != nil {
-		log.Println("Failed to send onOpen message:", err)
-		ws.Close()
+
+	if err := ws.WriteJSON(welcomeMsg); err != nil {
+		log.Println("Failed to send welcome message:", err)
 		return
 	}
 
-	// Jetzt Auth/Handshake vom Client erwarten
-	var payload handshakePayload
-	_, msg, err := ws.ReadMessage()
-	if err != nil {
-		log.Println("Handshake read error:", err)
-		ws.Close()
-		return
-	}
-	if err := json.Unmarshal(msg, &payload); err != nil {
-		log.Println("Handshake JSON error:", err)
-		ws.Close()
-		return
-	}
-	// API-Key validieren
-	if r.db != nil {
-		ctx := req.Context()
-		validKey, err := r.db.GetAPIKey(ctx)
-		if err != nil || payload.Key != validKey {
-			log.Println("Invalid API key")
-			ws.WriteMessage(websocket.CloseMessage, []byte("Invalid API key"))
-			ws.Close()
-			return
-		}
-	}
-	// Jetzt Connection registrieren
+	// Register the connection with the hub so we can keep track of connected clients and send messages to them.
 	conn := &hub.Connection{
 		Ws:   ws,
 		Hub:  r.hub,
-		Info: hub.ClientInfo{UUID: assignedUUID, UserID: string(payload.Data.UserID)},
+		Info: hub.ClientInfo{UUID: assignedUUID, UserID: userId},
 		Send: make(chan hub.ResponseMessage, 256),
 	}
 	r.hub.Register(conn)
+
+	// Fire up the WritePump in a new goroutine. It listens for outgoing messages on the Send channel and writes them to the WebSocket,
+	// as well as sending periodic ping messages to keep the connection alive.
 	go conn.WritePump()
-	conn.ReadPump() // onMessage and onClose is handled inside ReadPump
+
+	// The ReadPump method is called in the current goroutine and continuously reads incoming messages from the WebSocket
+	// handling them as needed (such as responding to keep-alive messages or processing client commands).
+	// When ReadPump exits (for example, if the connection is closed or an error occurs), it ensures the connection is unregistered and cleaned up.
+	conn.ReadPump()
+}
+
+func (r *Router) isValid(key string, ctx context.Context) bool {
+	if r.db != nil {
+		validKey, err := r.db.GetAPIKey(ctx)
+		if err != nil {
+			log.Println("DB error while validating API key:", err)
+			return false
+		}
+		return key == validKey
+	}
+
+	return false
 }
