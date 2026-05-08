@@ -1,7 +1,7 @@
 package hub
 
 import (
-	"fmt"
+	"encoding/json"
 	"log"
 	"time"
 
@@ -45,8 +45,6 @@ func (c *Connection) ReadPump() {
 			log.Println("read error:", err)
 			break
 		}
-		// Hier ggf. Nachrichtenverarbeitung
-		fmt.Println("Nachricht empfangen:", msg)
 
 		switch msg.Type {
 		case IncomingKeepAlive:
@@ -54,6 +52,43 @@ func (c *Connection) ReadPump() {
 			response := ResponseMessage{
 				Type:    ResponseKeepAlive,
 				Message: "Pong",
+			}
+			c.Send <- response
+
+		case IncomingRegisterBrowserPushNotification:
+			var payload IncomingRegisterBrowserPushNotificationPayload
+			if err := mapToStruct(msg.Payload, &payload); err != nil {
+				log.Println("Invalid payload for RegisterBrowserPushNotification:", err)
+				continue
+			}
+
+			//log.Println("Enable Browser Push Notifications for this Client")
+			c.Hub.SetUserPushNotificationPreference(c.Info.UserID, true)
+
+		case IncomingTestPushNotification:
+			log.Println("Received TestPushNotification command from client, sending test alert")
+			var payload IncomingTestPushNotificationPayload
+			if err := mapToStruct(msg.Payload, &payload); err != nil {
+				log.Println("Invalid payload for IncomingTestPushNotificationPayload:", err)
+				continue
+			}
+
+			testMsg := ResponseMessage{
+				Type:    ResponseProcessPushNotification,
+				Message: "This is a test push notification triggered by the client",
+				Payload: map[string]string{
+					"title": payload.Title,
+					"icon":  payload.Icon,
+					"type":  "host", // host or service
+				},
+			}
+			c.Hub.SendToUser(c.Info.UserID, testMsg, true)
+
+		default:
+			log.Println("Unknown message type:", msg.Type)
+			response := ResponseMessage{
+				Type:    ResponseError,
+				Message: "Unknown message type: " + string(msg.Type),
 			}
 			c.Send <- response
 		}
@@ -90,4 +125,13 @@ func (c *Connection) WritePump() {
 			}
 		}
 	}
+}
+
+// mapToStruct decodes a map[string]interface{} (or any JSON-like map) into a struct using JSON marshal/unmarshal.
+func mapToStruct(input any, out any) error {
+	b, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
 }

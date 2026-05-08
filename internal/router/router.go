@@ -20,57 +20,74 @@ type Router struct {
 	db      *db.DB
 }
 
+// MessageInputPayload defines the expected JSON structure for incoming messages to the /message endpoint.
+type PostMessage struct {
+	Timestamp   int64  `json:"timestamp"`
+	UserId      int64  `json:"userId"`
+	Title       string `json:"title"`
+	Message     string `json:"message"`
+	Type        string `json:"type"`
+	HostUuid    string `json:"hostUuid"`
+	ServiceUuid string `json:"serviceUuid"`
+	Icon        string `json:"icon"`
+	State       int64  `json:"state"` // 0=OK, 1=Warning, 2=Critical, 3=Unknown
+}
+
 // NewRouter kann optional einen WebHookService und eine DB erhalten
 func NewRouter(h *hub.Hub, wh *webhook.WebHookService, dbConn *db.DB) http.Handler {
 	r := &Router{hub: h, webhook: wh, db: dbConn}
 	mux := http.NewServeMux()
+
+	// The root path "/" is used for WebSocket connections.
 	mux.HandleFunc("/", r.handleWebSocket)
 
+	// The "/healthz" endpoint is a simple health check that returns "ok". This can be used by Kubernetes or other monitoring tools to check if the service is running.
 	// The "z" is a cloud-native Kubernetes convention for a simple health check endpoint. It can be used by Kubernetes liveness/readiness probes.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+
+	// The "/message" endpoint accepts POST requests with a JSON body to send messages to users or broadcast to all clients
+	// This is used by Naemon to trigger push notifications
 	mux.HandleFunc("/message", r.handleMessageInput)
 	return mux
 }
 
-// MessageInputPayload ist das erwartete JSON für /message
-type MessageInputPayload struct {
-	UserID  int64       `json:"user_id"`
-	Type    string      `json:"type"`
-	Data    interface{} `json:"data"`
-	WebHook bool        `json:"webhook,omitempty"` // Optional: explizit an WebHook senden
-}
-
-// handleMessageInput nimmt POST-JSON entgegen und verteilt die Nachricht
+// handleMessageInput handles incoming POST requests to the /message endpoint.
 func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var payload MessageInputPayload
+	var data PostMessage
 	decoder := json.NewDecoder(req.Body)
-	if err := decoder.Decode(&payload); err != nil {
+	if err := decoder.Decode(&data); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if data.UserId <= 0 {
+		http.Error(w, "Invalid userId", http.StatusBadRequest)
+		return
+	}
+
+	if !r.hub.ClientWantPushNotifications(data.UserId) {
+		http.Error(w, "User is not registered for push notifications", http.StatusBadRequest)
 		return
 	}
 
 	// FIXME!!
 	//msg := hub.ResponseMessage{Type: hub.MessageType(payload.Type), Message: "", Data: payload.Data}
 	msg := hub.ResponseMessage{}
-	if payload.WebHook && r.webhook != nil {
-		go r.webhook.Send(msg)
-	} else if payload.UserID > 0 {
-		r.hub.SendToUser(payload.UserID, msg)
-	} else {
-		r.hub.Broadcast(msg)
-	}
+	//go r.webhook.Send(msg)
+	r.hub.SendToUser(data.UserId, msg, false)
+
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte("ok"))
 }
 
-// handleWebSocket handles the incoming WebSocket connection.
+// handleWebSocket handles the incoming WebSocket connection. ("/")
 func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	// For authentication, the Client send an API key as a subprotocol during the WebSocket handshake. (HTTP Header)
 	// Sec-WebSocket-Protocol: access_token, <API_KEY>
@@ -86,6 +103,7 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	browserUuid := req.URL.Query().Get("browserUuid")
 
 	// Extract subprotocol (API key) from the request header
 	var apiKey string
@@ -94,7 +112,7 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 		apiKey = requestedProtocols[1]
 	}
 
-	if apiKey == "" || userId <= 0 || !r.isValid(apiKey, req.Context()) {
+	if browserUuid == "" || apiKey == "" || userId <= 0 || !r.isValid(apiKey, req.Context()) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -128,9 +146,14 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 
 	// Register the connection with the hub so we can keep track of connected clients and send messages to them.
 	conn := &hub.Connection{
-		Ws:   ws,
-		Hub:  r.hub,
-		Info: hub.ClientInfo{UUID: assignedUUID, UserID: userId},
+		Ws:  ws,
+		Hub: r.hub,
+		Info: hub.ClientInfo{
+			ClientUUID:           assignedUUID, // The uuid of the websocket client
+			BrowserUUID:          browserUuid,  // used for de-duplication if the user has multiple browser tabs open (push notifications)
+			UserID:               userId,       // the user_id of the connected client
+			SendPushNotification: false,        // We only send push notifications, if the client explicitly registers for it
+		},
 		Send: make(chan hub.ResponseMessage, 256),
 	}
 	r.hub.Register(conn)
@@ -145,6 +168,7 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	conn.ReadPump()
 }
 
+// isValid checks if the provided API key is valid by comparing it against the expected key from the database.
 func (r *Router) isValid(key string, ctx context.Context) bool {
 	if r.db != nil {
 		validKey, err := r.db.GetAPIKey(ctx)

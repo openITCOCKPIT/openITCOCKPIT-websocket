@@ -16,6 +16,12 @@ func (m *MessagingService) Broadcast(msg hub.ResponseMessage) {
 	m.hub.Broadcast(msg)
 }
 
-func (m *MessagingService) SendToUser(userID string, msg hub.ResponseMessage) {
-	m.hub.SendToUser(userID, msg)
+// SendToUser sends a message to a specific user by their user ID.
+func (m *MessagingService) SendToUser(userID int64, msg hub.ResponseMessage) {
+	m.hub.SendToUser(userID, msg, false)
+}
+
+// SendToUserDeDeuplicated sends a message to a specific user, but is intended for messages that should not be de-duplicated across multiple browser tabs.
+func (m *MessagingService) SendToUserDeDeuplicated(userID int64, msg hub.ResponseMessage) {
+	m.hub.SendToUser(userID, msg, true)
 }
