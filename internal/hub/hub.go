@@ -119,3 +119,10 @@ func (h *Hub) SendToUser(userID int64, msg ResponseMessage) {
 	}
 	h.clientsMutex.RUnlock()
 }
+
+// HasClients returns true if at least one client is connected to the hub.
+func (h *Hub) HasClients() bool {
+	h.clientsMutex.RLock()
+	defer h.clientsMutex.RUnlock()
+	return len(h.clients) > 0
+}

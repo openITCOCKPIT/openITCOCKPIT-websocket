@@ -21,6 +21,7 @@ type ExportWatcher struct {
 // WebSocketBroadcaster is an interface for broadcasting messages to all clients
 type WebSocketBroadcaster interface {
 	Broadcast(msg hub.ResponseMessage)
+	HasClients() bool
 }
 
 func NewExportWatcher(db *DB, hub WebSocketBroadcaster) *ExportWatcher {
@@ -67,9 +68,10 @@ type ExportRecord struct {
 }
 
 func (w *ExportWatcher) checkExportStarted() {
-
-	// TODO: Only query the database if we have clients connected.
-
+	if !w.hub.HasClients() {
+		// If no clients are connected, we can skip the database check to reduce load
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var record ExportRecord
@@ -79,7 +81,7 @@ func (w *ExportWatcher) checkExportStarted() {
 		return
 	}
 	if err == nil {
-		log.Printf("ExportWatcher: export_started record found: %+v", record)
+		//log.Printf("ExportWatcher: export_started record found: %+v", record)
 		exportRunning := false
 		if record.Finished == 0 {
 			exportRunning = true
