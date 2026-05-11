@@ -31,13 +31,15 @@ func main() {
 	exportWatcher := db.NewExportWatcher(dbConn, h)
 	exportWatcher.Start()
 
-	// WebHook-Gateways können hier konfiguriert werden
-	gateways := []string{
-		// "https://example.com/webhook"
-	}
-	whService := webhook.NewWebHookService(gateways)
+	appCtx := context.Background()
 
-	r := router.NewRouter(h, whService, dbConn)
+	// WebHook-Gateways können hier konfiguriert werden
+	whService, err := webhook.NewWebHookService(appCtx, dbConn)
+	if err != nil {
+		log.Fatalf("Failed to initialize WebHookService: %v", err)
+	}
+
+	r := router.NewRouter(appCtx, h, whService, dbConn)
 
 	srv := &http.Server{
 		Addr:    ":8083",

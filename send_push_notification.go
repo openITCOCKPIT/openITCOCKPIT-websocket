@@ -5,43 +5,42 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
+	"push_notification/internal/messaging"
 	"time"
 )
 
-type PostMessage struct {
-	Timestamp        time.Time `json:"timestamp"`
-	UserId           int64     `json:"userId"`
-	Title            string    `json:"title"`
-	Message          string    `json:"message"`
-	Type             string    `json:"type"`
-	HostUuid         string    `json:"hostUuid"`
-	ServiceUuid      string    `json:"serviceUuid"`
-	Icon             string    `json:"icon"`
-	State            int       `json:"state"`
-	NotificationType string    `json:"notificationtype,omitempty"`
-	Output           string    `json:"output,omitempty"`
-	AckAuthor        string    `json:"ackauthor,omitempty"`
-	AckComment       string    `json:"ackcomment,omitempty"`
-}
-
+// This is a simple CLI tool to send push notifications to the push_notification service.
+// This command will be used by Naemon to trigger push notifications based on monitoring events.
+// Usage example:
+// go run send_push_notification.go --type=host --notificationtype=PROBLEM --hostuuid=1234-5678-90ab-cdef --state=2 --output="Host is down" --user-id=1
 func main() {
+	// Read the address from openITCOCKPIT Server from the environment, in case we run in docker
+	address := "127.0.0.1"
+
+	if os.Getenv("OITC_ADDRESS") == "1" {
+		address = os.Getenv("OITC_ADDRESS")
+		if address == "" {
+			address = "openitcockpit"
+		}
+	}
+
+	url := fmt.Sprintf("http://%s:8083/message", address)
+
 	// Define flags
 	msgType := flag.String("type", "", "Type of the notification: host or service")
 	msgTypeShort := flag.String("t", "", "Short for --type")
-	notificationType := flag.String("notificationtype", "", "Notification type of monitoring engine")
-	hostUuid := flag.String("hostuuid", "", "Host uuid you want to send a notification")
-	serviceUuid := flag.String("serviceuuid", "", "Service uuid you want to send a notification")
-	state := flag.Int("state", 0, "Current host/service state")
-	output := flag.String("output", "", "Host/service output")
-	ackAuthor := flag.String("ackauthor", "", "Acknowledgement author")
-	ackComment := flag.String("ackcomment", "", "Acknowledgement comment")
+	notificationType := flag.String("notificationtype", "", "Notification type of monitoring engine => $NOTIFICATIONTYPE$")
+	hostUuid := flag.String("hostuuid", "", "Host uuid you want to send a notification => $HOSTNAME$")
+	serviceUuid := flag.String("serviceuuid", "", "Service uuid you want to send a notification => $SERVICEDESC$")
+	state := flag.Int("state", 0, "Current host/service state => $HOSTSTATEID$/$SERVICESTATEID$")
+	output := flag.String("output", "", "Host/service output => $HOSTOUTPUT$/$SERVICEOUTPUT$")
+	ackAuthor := flag.String("ackauthor", "", "Acknowledgement author => $NOTIFICATIONAUTHOR$")
+	ackComment := flag.String("ackcomment", "", "Acknowledgement comment => $NOTIFICATIONCOMMENT$")
 	userId := flag.Int64("user-id", 0, "openITCOCKPIT User Id")
-	title := flag.String("title", "", "Title of the notification")
-	message := flag.String("message", "", "Message body")
-	icon := flag.String("icon", "", "Icon path")
-	url := flag.String("url", "http://localhost:8083/message", "Push notification endpoint URL")
 
 	flag.Parse()
 
@@ -55,15 +54,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	postMsg := PostMessage{
-		Timestamp:        time.Now().UTC(),
+	postMsg := messaging.PostMessage{
+		Timestamp:        time.Now().Unix(),
 		UserId:           *userId,
-		Title:            *title,
-		Message:          *message,
-		Type:             *msgType,
+		Type:             finalType,
 		HostUuid:         *hostUuid,
 		ServiceUuid:      *serviceUuid,
-		Icon:             *icon,
 		State:            *state,
 		NotificationType: *notificationType,
 		Output:           *output,
@@ -77,7 +73,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	resp, err := http.Post(*url, "application/json", bytes.NewBuffer(jsonData))
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "HTTP request failed:", err)
 		os.Exit(1)
@@ -85,32 +85,16 @@ func main() {
 	defer resp.Body.Close()
 
 	fmt.Printf("Response status: %s\n", resp.Status)
-}
 
-func isAcknowledgement(notificationtype string) bool {
-	return notificationtype == "ACKNOWLEDGEMENT"
-}
+	responseData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(responseData))
 
-func isFlappingStart(notificationtype string) bool {
-	return notificationtype == "FLAPPINGSTART"
-}
+	if resp.StatusCode != http.StatusOK {
+		os.Exit(1)
+	}
 
-func isFlappingStop(notificationtype string) bool {
-	return notificationtype == "FLAPPINGSTOP"
-}
-
-func isFlappingDisabled(notificationtype string) bool {
-	return notificationtype == "FLAPPINGDISABLED"
-}
-
-func isDowntimeStart(notificationtype string) bool {
-	return notificationtype == "DOWNTIMESTART"
-}
-
-func isDowntimeEnd(notificationtype string) bool {
-	return notificationtype == "DOWNTIMEEND"
-}
-
-func isDowntimeCancelled(notificationtype string) bool {
-	return notificationtype == "DOWNTIMECANCELLED"
+	os.Exit(0)
 }
