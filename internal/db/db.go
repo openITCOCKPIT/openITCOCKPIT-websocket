@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"push_notification/pkg/models"
 
 	"database/sql"
@@ -60,7 +61,12 @@ func NewDBFromMyCnf(path string) (*DB, error) {
 		return nil, err
 	}
 	bunDB := bun.NewDB(sqldb, mysqldialect.New())
-	debugQuery := true
+	debugQuery := false
+
+	if os.Getenv("MYSQL_DEBUG") == "1" {
+		debugQuery = true
+	}
+
 	bunDB.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(debugQuery)))
 	return &DB{Bun: bunDB}, nil
 }

@@ -42,12 +42,12 @@ func main() {
 	r := router.NewRouter(appCtx, h, whService, dbConn)
 
 	srv := &http.Server{
-		Addr:    ":8083",
+		Addr:    "127.0.0.1:8083",
 		Handler: r,
 	}
 
 	go func() {
-		log.Println("Server started on :8083")
+		log.Println("Server started on 127.0.0.1:8083")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("ListenAndServe(): %v", err)
 		}
