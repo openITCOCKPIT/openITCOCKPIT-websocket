@@ -1,5 +1,7 @@
 # openITCOCKPIT WebSocket Server
 
+![WebSocket Sever for openITCOCKPIT](./websocket_openitcockpit.png)
+
 This project is the WebSocket Server for openITCOCKPIT. It is designed to run on the main openITCOCKPIT system (not on satellite systems).
 
 ## Features
