@@ -76,10 +76,13 @@ func (c *Connection) ReadPump() {
 			testMsg := ResponseMessage{
 				Type:    ResponseProcessPushNotification,
 				Message: "This is a test push notification triggered by the client",
-				Payload: map[string]string{
-					"title": payload.Title,
-					"icon":  payload.Icon,
-					"type":  "host", // host or service
+				Payload: ResponsePushNotificationPayload{
+					Timestamp: time.Now().Unix(),
+					UserId:    c.Info.UserID,
+					Title:     payload.Title,
+					Message:   payload.Title,
+					Type:      "host", // host or service
+					Icon:      payload.Icon,
 				},
 			}
 			c.Hub.SendToUser(c.Info.UserID, testMsg, true)

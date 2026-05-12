@@ -45,6 +45,17 @@ type ResponseMessage struct {
 	Payload any                 `json:"payload"`
 }
 
+type ResponsePushNotificationPayload struct {
+	Timestamp   int64  `json:"timestamp"`
+	UserId      int64  `json:"userId"`
+	Title       string `json:"title"`
+	Message     string `json:"message"`
+	Type        string `json:"type"` // host or service
+	HostUuid    string `json:"hostUuid,omitempty"`
+	ServiceUuid string `json:"serviceUuid,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+}
+
 type ClientInfo struct {
 	ClientUUID           string
 	BrowserUUID          string

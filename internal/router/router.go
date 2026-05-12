@@ -11,6 +11,7 @@ import (
 	"push_notification/internal/webhook"
 	"push_notification/pkg/models"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,6 +72,8 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	notification.Type = strings.ToLower(notification.Type)
+
 	if r.db != nil {
 		if !r.hub.ClientWantPushNotifications(notification.UserId) && !r.webhook.IsMobilePushNotificationRelayEnabled() {
 			// Only abort if no browser is connected and also no mobile push relay is configured
@@ -124,16 +127,21 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 			msg := hub.ResponseMessage{
 				Type:    hub.ResponseProcessPushNotification,
 				Message: message,
-				Payload: map[string]string{
-					"title":   title,
-					"message": message,
-					"icon":    icon,
-					"type":    notification.Type, // host or service
+				Payload: hub.ResponsePushNotificationPayload{
+					Timestamp:   notification.Timestamp,
+					UserId:      notification.UserId,
+					Title:       title,
+					Message:     message,
+					Type:        notification.Type, // host or service
+					HostUuid:    notification.HostUuid,
+					ServiceUuid: notification.ServiceUuid,
+					Icon:        icon,
 				},
 			}
 			r.hub.SendToUser(notification.UserId, msg, true)
 		}
 
+		// Send the notification to the user via Mobile Push Notification (if enabled in the WebHookService)
 		r.webhook.SendMobilePush(notification.UserId, title, message, icon, notification)
 
 		w.WriteHeader(http.StatusOK)
