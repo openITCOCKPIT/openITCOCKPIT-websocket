@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"push_notification/internal/common"
 	"push_notification/internal/db"
 	"push_notification/internal/hub"
 	"push_notification/internal/webhook"
@@ -123,10 +124,10 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 
 		if r.hub.ClientWantPushNotifications(notification.UserId) {
 			// Send the notification to the user via WebSocket (if any browser is connected)
-			msg := hub.ResponseMessage{
-				Type:    hub.ResponseProcessPushNotification,
+			msg := common.ResponseMessage{
+				Type:    common.ResponseProcessPushNotification,
 				Message: message,
-				Payload: hub.ResponsePushNotificationPayload{
+				Payload: common.ResponsePushNotificationPayload{
 					Timestamp:   notification.Timestamp,
 					UserId:      notification.UserId,
 					Title:       title,
@@ -196,8 +197,8 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	defer ws.Close()
 
 	assignedUUID := uuid.NewString()
-	welcomeMsg := hub.ResponseMessage{
-		Type:    hub.ResponseConnectionEstablished,
+	welcomeMsg := common.ResponseMessage{
+		Type:    common.ResponseConnectionEstablished,
 		Message: "Connection established successfully",
 		Payload: map[string]string{
 			"clientUuid": assignedUUID,
@@ -219,7 +220,7 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 			UserID:               userId,       // the user_id of the connected client
 			SendPushNotification: false,        // We only send push notifications, if the client explicitly registers for it
 		},
-		Send: make(chan hub.ResponseMessage, 256),
+		Send: make(chan common.ResponseMessage, 256),
 	}
 	r.hub.Register(conn)
 

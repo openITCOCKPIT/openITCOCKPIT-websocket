@@ -11,6 +11,7 @@ import (
 	"push_notification/internal/db"
 	"push_notification/internal/hub"
 	"push_notification/internal/router"
+	"push_notification/internal/watcher"
 	"push_notification/internal/webhook"
 )
 
@@ -25,13 +26,6 @@ func main() {
 		log.Fatalf("DB connect error: %v", err)
 	}
 
-	h := hub.NewHub()
-	go h.Run()
-
-	// Start ExportWatcher to monitor for config refresh and broadcast changes to clients
-	exportWatcher := db.NewExportWatcher(dbConn, h)
-	exportWatcher.Start()
-
 	appCtx := context.Background()
 
 	// Initialize WebHookService which will send Mobile Push Notifications via the public relay server for iOS and Android devices
@@ -39,6 +33,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize WebHookService: %v", err)
 	}
+
+	h := hub.NewHub(whService)
+	go h.Run()
+
+	// Start ExportWatcher to monitor for config refresh and broadcast changes to clients
+	exportWatcher := watcher.NewExportWatcher(dbConn, h)
+	exportWatcher.Start()
 
 	// The Router will handle incoming HTTP requests for WebSocket connections and message inputs.
 	r := router.NewRouter(appCtx, h, whService, dbConn)

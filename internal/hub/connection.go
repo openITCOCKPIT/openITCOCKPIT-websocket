@@ -3,6 +3,8 @@ package hub
 import (
 	"encoding/json"
 	"log"
+	"push_notification/internal/common"
+	"push_notification/pkg/models"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -19,7 +21,7 @@ type Connection struct {
 	Ws   *websocket.Conn
 	Hub  *Hub
 	Info ClientInfo
-	Send chan ResponseMessage
+	Send chan common.ResponseMessage
 }
 
 // ReadPump listens for incoming messages from the WebSocket connection.
@@ -49,8 +51,8 @@ func (c *Connection) ReadPump() {
 		switch msg.Type {
 		case IncomingKeepAlive:
 			// KeepAlive message - respond with "Pong"
-			response := ResponseMessage{
-				Type:    ResponseKeepAlive,
+			response := common.ResponseMessage{
+				Type:    common.ResponseKeepAlive,
 				Message: "Pong",
 			}
 			c.Send <- response
@@ -73,10 +75,11 @@ func (c *Connection) ReadPump() {
 				continue
 			}
 
-			testMsg := ResponseMessage{
-				Type:    ResponseProcessPushNotification,
+			// Send a test browser push notification to the users
+			testMsg := common.ResponseMessage{
+				Type:    common.ResponseProcessPushNotification,
 				Message: "This is a test push notification triggered by the client",
-				Payload: ResponsePushNotificationPayload{
+				Payload: common.ResponsePushNotificationPayload{
 					Timestamp: time.Now().Unix(),
 					UserId:    c.Info.UserID,
 					Title:     payload.Title,
@@ -87,10 +90,21 @@ func (c *Connection) ReadPump() {
 			}
 			c.Hub.SendToUser(c.Info.UserID, testMsg, true)
 
+			// Also try to send a test notification to the mobile app via the WebHookService (if enabled)
+			c.Hub.webhook.SendMobilePush(c.Info.UserID, payload.Title, payload.Title, payload.Icon, models.PostMessage{
+				Timestamp:        time.Now().Unix(),
+				UserId:           c.Info.UserID,
+				Type:             "host", // host or service
+				State:            0,
+				NotificationType: "CUSTOM",
+				Output:           "This is a test push notification triggered by the client",
+				Icon:             payload.Icon,
+			})
+
 		default:
 			log.Println("Unknown message type:", msg.Type)
-			response := ResponseMessage{
-				Type:    ResponseError,
+			response := common.ResponseMessage{
+				Type:    common.ResponseError,
 				Message: "Unknown message type: " + string(msg.Type),
 			}
 			c.Send <- response
