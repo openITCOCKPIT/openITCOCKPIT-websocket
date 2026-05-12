@@ -15,10 +15,11 @@ import (
 )
 
 func main() {
+	// Create a context that is canceled on SIGINT or SIGTERM for graceful shutdown
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Datenbankverbindung herstellen
+	// Connect to database
 	dbConn, err := db.NewDBFromMyCnf("/opt/openitc/etc/mysql/mysql.cnf")
 	if err != nil {
 		log.Fatalf("DB connect error: %v", err)
@@ -27,18 +28,19 @@ func main() {
 	h := hub.NewHub()
 	go h.Run()
 
-	// ExportWatcher starten (nutzt Hub als Broadcaster)
+	// Start ExportWatcher to monitor for config refresh and broadcast changes to clients
 	exportWatcher := db.NewExportWatcher(dbConn, h)
 	exportWatcher.Start()
 
 	appCtx := context.Background()
 
-	// WebHook-Gateways können hier konfiguriert werden
+	// Initialize WebHookService which will send Mobile Push Notifications via the public relay server for iOS and Android devices
 	whService, err := webhook.NewWebHookService(appCtx, dbConn)
 	if err != nil {
 		log.Fatalf("Failed to initialize WebHookService: %v", err)
 	}
 
+	// The Router will handle incoming HTTP requests for WebSocket connections and message inputs.
 	r := router.NewRouter(appCtx, h, whService, dbConn)
 
 	srv := &http.Server{
@@ -46,6 +48,7 @@ func main() {
 		Handler: r,
 	}
 
+	// Start the HTTP server in a separate goroutine so that it doesn't block the main thread, allowing us to listen for shutdown signals.
 	go func() {
 		log.Println("Server started on 127.0.0.1:8083")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -53,10 +56,10 @@ func main() {
 		}
 	}()
 
+	// Wait for shutdown signal
 	<-shutdownCtx.Done()
 	log.Println("Shutdown signal received")
 
-	// ExportWatcher stoppen
 	exportWatcher.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
