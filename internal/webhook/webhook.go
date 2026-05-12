@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"push_notification/internal/db"
-	"push_notification/internal/messaging"
 	"push_notification/pkg/models"
 )
 
@@ -48,7 +47,7 @@ func (w *WebHookService) IsMobilePushNotificationRelayEnabled() bool {
 
 // SendMobilePush sends a mobile push notification to all devices of a user using the relay settings.
 // The send is executed in a goroutine for each device.
-func (w *WebHookService) SendMobilePush(userId int64, title, message, icon string, notification messaging.PostMessage) {
+func (w *WebHookService) SendMobilePush(userId int64, title, message, icon string, notification models.PostMessage) {
 	if !w.isMobilePushRelayEnabled {
 		return
 	}

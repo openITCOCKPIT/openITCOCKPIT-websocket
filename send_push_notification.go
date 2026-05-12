@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"push_notification/internal/messaging"
+	"push_notification/pkg/models"
 	"time"
 )
 
@@ -54,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	postMsg := messaging.PostMessage{
+	postMsg := models.PostMessage{
 		Timestamp:        time.Now().Unix(),
 		UserId:           *userId,
 		Type:             finalType,

@@ -1,4 +1,4 @@
-package messaging
+package models
 
 // PostMessage represents the structure of the message that Naemon (send_push_notification.go) will send to the /message endpoint of the push_notification service.
 type PostMessage struct {

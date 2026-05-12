@@ -2,12 +2,11 @@ package router
 
 import (
 	"fmt"
-	"push_notification/internal/messaging"
 	"push_notification/pkg/models"
 )
 
 // getHostNotificationData generates the title, message and icon for a host notification based on the notification type and host data.
-func getHostNotificationData(notification messaging.PostMessage, host *models.Host) (string, string, string) {
+func getHostNotificationData(notification models.PostMessage, host *models.Host) (string, string, string) {
 	if host == nil {
 		return "", "", ""
 	}
@@ -72,7 +71,7 @@ func getHostNotificationData(notification messaging.PostMessage, host *models.Ho
 }
 
 // getServiceNotificationData generates the title, message and icon for a service notification based on the notification type and service data.
-func getServiceNotificationData(notification messaging.PostMessage, host *models.Host, service *models.Service) (string, string, string) {
+func getServiceNotificationData(notification models.PostMessage, host *models.Host, service *models.Service) (string, string, string) {
 	if service == nil {
 		return "", "", ""
 	}

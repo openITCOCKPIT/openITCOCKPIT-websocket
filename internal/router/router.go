@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"push_notification/internal/db"
 	"push_notification/internal/hub"
-	"push_notification/internal/messaging"
 	"push_notification/internal/webhook"
 	"push_notification/pkg/models"
 	"strconv"
@@ -52,7 +51,7 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var notification messaging.PostMessage
+	var notification models.PostMessage
 	decoder := json.NewDecoder(req.Body)
 	if err := decoder.Decode(&notification); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
