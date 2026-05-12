@@ -15,16 +15,10 @@ type ExportWatcher struct {
 	db     *DB
 	stopCh chan struct{}
 	wg     sync.WaitGroup
-	hub    WebSocketBroadcaster
+	hub    *hub.Hub
 }
 
-// WebSocketBroadcaster is an interface for broadcasting messages to all clients
-type WebSocketBroadcaster interface {
-	Broadcast(msg hub.ResponseMessage)
-	HasClients() bool
-}
-
-func NewExportWatcher(db *DB, hub WebSocketBroadcaster) *ExportWatcher {
+func NewExportWatcher(db *DB, hub *hub.Hub) *ExportWatcher {
 	return &ExportWatcher{
 		db:     db,
 		stopCh: make(chan struct{}),
