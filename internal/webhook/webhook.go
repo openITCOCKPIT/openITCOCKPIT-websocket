@@ -58,20 +58,21 @@ func (w *WebHookService) SendMobilePush(userId int64, title, message, icon strin
 		return
 	}
 
-	endpoint := fmt.Sprintf("%s:%d/send-notification", w.relay.Address, w.relay.Port)
+	endpoint := fmt.Sprintf("%s:%d/notifications/send-notification.json", w.relay.Address, w.relay.Port)
 	authKey := w.relay.AuthKey
 
 	for _, device := range devices {
 		data := map[string]interface{}{
-			"title":       title,
-			"body":        message,
-			"token":       device.DeviceID,
-			"icon":        icon,
-			"type":        notification.Type,
-			"hostUuid":    notification.HostUuid,
-			"serviceUuid": notification.ServiceUuid,
-			"userId":      userId,
-			"auth":        authKey,
+			"title":             title,
+			"body":              message,
+			"token":             device.DeviceID,
+			"type":              notification.Type,
+			"notification_type": notification.NotificationType,
+			"current_state":     notification.State,
+			"host_uuid":         notification.HostUuid,
+			"service_uuid":      notification.ServiceUuid,
+			"user_id":           userId,
+			"auth_key":          authKey,
 		}
 
 		go func(deviceId string) {
