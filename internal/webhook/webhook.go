@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"push_notification/internal/db"
 	"push_notification/pkg/models"
+	"strconv"
+	"strings"
 )
 
 type WebHookService struct {
@@ -18,6 +22,50 @@ type WebHookService struct {
 	isMobilePushRelayEnabled bool
 	relay                    models.PushNotificationsRelay
 	authKey                  string
+}
+
+func buildRelayEndpoint(address string, port int) (string, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", fmt.Errorf("relay address is empty")
+	}
+
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", fmt.Errorf("invalid relay address %q: %w", address, err)
+	}
+
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("invalid relay host in address %q", address)
+	}
+
+	finalPort := u.Port()
+	if finalPort == "" && port > 0 {
+		finalPort = strconv.Itoa(port)
+	}
+
+	if (u.Scheme == "https" && finalPort == "443") || (u.Scheme == "http" && finalPort == "80") {
+		u.Host = host
+	} else if finalPort != "" {
+		u.Host = net.JoinHostPort(host, finalPort)
+	} else {
+		u.Host = host
+	}
+
+	u.Path = "/notifications/send-notification.json"
+	u.RawQuery = ""
+	u.Fragment = ""
+
+	return u.String(), nil
 }
 
 func NewWebHookService(appCtx context.Context, dbConn *db.DB) (*WebHookService, error) {
@@ -58,7 +106,11 @@ func (w *WebHookService) SendMobilePush(userId int64, title, message, icon strin
 		return
 	}
 
-	endpoint := fmt.Sprintf("%s:%d/notifications/send-notification.json", w.relay.Address, w.relay.Port)
+	endpoint, err := buildRelayEndpoint(w.relay.Address, w.relay.Port)
+	if err != nil {
+		log.Printf("Failed to build relay endpoint: %v", err)
+		return
+	}
 	authKey := w.relay.AuthKey
 
 	for _, device := range devices {
@@ -112,7 +164,7 @@ func (w *WebHookService) SendMobilePush(userId int64, title, message, icon strin
 				}
 			}
 
-			if resp.StatusCode != http.StatusOK { // 200
+			if resp.StatusCode != http.StatusOK { // Not 200
 				log.Printf("Failed to send push to device %s: received status code %d", deviceId, resp.StatusCode)
 			}
 		}(device.DeviceID)
