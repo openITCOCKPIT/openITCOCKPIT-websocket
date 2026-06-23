@@ -111,6 +111,10 @@ func (w *WebHookService) SendMobilePush(userId int64, title, message, icon strin
 					log.Printf("Failed to delete device %s: %v", deviceId, err)
 				}
 			}
+
+			if resp.StatusCode != http.StatusOK { // 200
+				log.Printf("Failed to send push to device %s: received status code %d", deviceId, resp.StatusCode)
+			}
 		}(device.DeviceID)
 	}
 }
