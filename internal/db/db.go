@@ -128,6 +128,11 @@ func (db *DB) IsMobilePushNotificationRelayEnabled(ctx context.Context) (bool, e
 		Limit(1).
 		Scan(ctx)
 	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return false, nil
+		}
+
+		// Serious error occurred, return it
 		return false, err
 	}
 	return relay.Enabled, nil
@@ -141,6 +146,14 @@ func (db *DB) GetMobilePushRelay(ctx context.Context) (models.PushNotificationsR
 		Limit(1).
 		Scan(ctx)
 	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			// Return blank default struct if no PushRelay is configured
+			return models.PushNotificationsRelay{
+				Enabled: false,
+			}, nil
+
+		}
+
 		return models.PushNotificationsRelay{}, err
 	}
 	return relay, nil
