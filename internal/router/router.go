@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"push_notification/internal/common"
 	"push_notification/internal/db"
 	"push_notification/internal/hub"
 	"push_notification/internal/webhook"
+	"push_notification/pkg/models"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -18,24 +22,12 @@ type Router struct {
 	hub     *hub.Hub
 	webhook *webhook.WebHookService
 	db      *db.DB
-}
-
-// MessageInputPayload defines the expected JSON structure for incoming messages to the /message endpoint.
-type PostMessage struct {
-	Timestamp   int64  `json:"timestamp"`
-	UserId      int64  `json:"userId"`
-	Title       string `json:"title"`
-	Message     string `json:"message"`
-	Type        string `json:"type"`
-	HostUuid    string `json:"hostUuid"`
-	ServiceUuid string `json:"serviceUuid"`
-	Icon        string `json:"icon"`
-	State       int64  `json:"state"` // 0=OK, 1=Warning, 2=Critical, 3=Unknown
+	appCtx  context.Context
 }
 
 // NewRouter kann optional einen WebHookService und eine DB erhalten
-func NewRouter(h *hub.Hub, wh *webhook.WebHookService, dbConn *db.DB) http.Handler {
-	r := &Router{hub: h, webhook: wh, db: dbConn}
+func NewRouter(appCtx context.Context, h *hub.Hub, wh *webhook.WebHookService, dbConn *db.DB) http.Handler {
+	r := &Router{hub: h, webhook: wh, db: dbConn, appCtx: appCtx}
 	mux := http.NewServeMux()
 
 	// The root path "/" is used for WebSocket connections.
@@ -60,31 +52,105 @@ func (r *Router) handleMessageInput(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var data PostMessage
+	var notification models.PostMessage
 	decoder := json.NewDecoder(req.Body)
-	if err := decoder.Decode(&data); err != nil {
+	if err := decoder.Decode(&notification); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	if data.UserId <= 0 {
+	if notification.UserId <= 0 {
 		http.Error(w, "Invalid userId", http.StatusBadRequest)
 		return
 	}
 
-	if !r.hub.ClientWantPushNotifications(data.UserId) {
-		http.Error(w, "User is not registered for push notifications", http.StatusBadRequest)
+	// Drop messages older than 5 minutes to avoid sending stale notifications
+	if time.Since(time.Unix(notification.Timestamp, 0)) > 5*time.Minute {
+		log.Printf("Dropping stale notification for user %d: timestamp %s is older than 5 minutes", notification.UserId, notification.Timestamp)
+		w.WriteHeader(http.StatusAccepted)
+		w.Write([]byte("Notification is too old and was dropped"))
 		return
 	}
 
-	// FIXME!!
-	//msg := hub.ResponseMessage{Type: hub.MessageType(payload.Type), Message: "", Data: payload.Data}
-	msg := hub.ResponseMessage{}
-	//go r.webhook.Send(msg)
-	r.hub.SendToUser(data.UserId, msg, false)
+	notification.Type = strings.ToLower(notification.Type)
 
-	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte("ok"))
+	if r.db != nil {
+		if !r.hub.ClientWantPushNotifications(notification.UserId) && !r.webhook.IsMobilePushNotificationRelayEnabled() {
+			// Only abort if no browser is connected and also no mobile push relay is configured
+			w.WriteHeader(http.StatusAccepted)
+			w.Write([]byte("User is not registered for push notifications"))
+			return
+		}
+
+		// We are connected to the database
+		host, err := r.db.GetHostByUUID(req.Context(), notification.HostUuid)
+		if err != nil {
+			log.Printf("DB error while fetching host for UUID %s: %v", notification.HostUuid, err)
+			http.Error(w, "DB error while fetching host", http.StatusInternalServerError)
+			return
+		}
+
+		var title, message, icon string
+
+		if host == nil {
+			log.Printf("No host found for UUID %s", notification.HostUuid)
+			http.Error(w, "No host found for given UUID", http.StatusBadRequest)
+			return
+		}
+
+		var service *models.Service
+		if notification.Type == "service" {
+			service, err = r.db.GetServiceByUUID(req.Context(), notification.ServiceUuid)
+			if err != nil {
+				log.Printf("DB error while fetching service for UUID %s: %v", notification.ServiceUuid, err)
+				http.Error(w, "DB error while fetching service", http.StatusInternalServerError)
+				return
+			}
+
+			if service == nil {
+				log.Printf("No service found for UUID %s", notification.ServiceUuid)
+				http.Error(w, "No service found for given UUID", http.StatusBadRequest)
+				return
+			}
+		}
+
+		if notification.Type == "host" {
+			// Host notification
+			title, message, icon = getHostNotificationData(notification, host)
+		} else {
+			// Service notification
+			title, message, icon = getServiceNotificationData(notification, host, service)
+		}
+
+		if r.hub.ClientWantPushNotifications(notification.UserId) {
+			// Send the notification to the user via WebSocket (if any browser is connected)
+			msg := common.ResponseMessage{
+				Type:    common.ResponseProcessPushNotification,
+				Message: message,
+				Payload: common.ResponsePushNotificationPayload{
+					Timestamp:   notification.Timestamp,
+					UserId:      notification.UserId,
+					Title:       title,
+					Message:     message,
+					Type:        notification.Type, // host or service
+					HostUuid:    notification.HostUuid,
+					ServiceUuid: notification.ServiceUuid,
+					Icon:        icon,
+				},
+			}
+			r.hub.SendToUser(notification.UserId, msg, true)
+		}
+
+		// Send the notification to the user via Mobile Push Notification (if enabled in the WebHookService)
+		r.webhook.SendMobilePush(notification.UserId, title, message, icon, notification)
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+		return
+	}
+
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte("Not Connected to DB, message was not delivered to the user"))
 }
 
 // handleWebSocket handles the incoming WebSocket connection. ("/")
@@ -131,8 +197,8 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	defer ws.Close()
 
 	assignedUUID := uuid.NewString()
-	welcomeMsg := hub.ResponseMessage{
-		Type:    hub.ResponseConnectionEstablished,
+	welcomeMsg := common.ResponseMessage{
+		Type:    common.ResponseConnectionEstablished,
 		Message: "Connection established successfully",
 		Payload: map[string]string{
 			"clientUuid": assignedUUID,
@@ -154,7 +220,7 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 			UserID:               userId,       // the user_id of the connected client
 			SendPushNotification: false,        // We only send push notifications, if the client explicitly registers for it
 		},
-		Send: make(chan hub.ResponseMessage, 256),
+		Send: make(chan common.ResponseMessage, 256),
 	}
 	r.hub.Register(conn)
 

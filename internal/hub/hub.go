@@ -1,6 +1,9 @@
 package hub
 
 import (
+	"push_notification/internal/common"
+	"push_notification/internal/webhook"
+	"push_notification/pkg/models"
 	"sync"
 )
 
@@ -29,22 +32,6 @@ type IncomingTestPushNotificationPayload struct {
 	Icon  string `json:"icon"`
 }
 
-type ResponseMessageType string
-
-const (
-	ResponseConnectionEstablished   ResponseMessageType = "ConnectionEstablished"   // Sent to client on successful connection with assigned UUID
-	ResponseExportStatus            ResponseMessageType = "ExportStatus"            // Sent to clients when export status changes (payload is boolean: true=running, false=stopped)
-	ResponseKeepAlive               ResponseMessageType = "KeepAlive"               // Sent to client in response to KeepAlive message (payload can be "Pong" or empty)
-	ResponseError                   ResponseMessageType = "Error"                   // Sent to client when an error occurs (payload is error message)
-	ResponseProcessPushNotification ResponseMessageType = "ProcessPushNotification" // Sent to client to trigger a push notification (payload contains notification details
-)
-
-type ResponseMessage struct {
-	Type    ResponseMessageType `json:"type"`
-	Message string              `json:"message"`
-	Payload any                 `json:"payload"`
-}
-
 type ClientInfo struct {
 	ClientUUID           string
 	BrowserUUID          string
@@ -57,17 +44,19 @@ type Hub struct {
 	clientsMutex sync.RWMutex
 	register     chan *Connection
 	unregister   chan *Connection
-	broadcast    chan ResponseMessage
+	broadcast    chan common.ResponseMessage
 	shutdown     chan struct{}
+	webhook      *webhook.WebHookService
 }
 
-func NewHub() *Hub {
+func NewHub(webhook *webhook.WebHookService) *Hub {
 	return &Hub{
 		clients:    make(map[*Connection]ClientInfo),
 		register:   make(chan *Connection),
 		unregister: make(chan *Connection),
-		broadcast:  make(chan ResponseMessage, 256),
+		broadcast:  make(chan common.ResponseMessage, 256),
 		shutdown:   make(chan struct{}),
+		webhook:    webhook,
 	}
 }
 
@@ -125,7 +114,7 @@ func (h *Hub) Unregister(conn *Connection) {
 	h.unregister <- conn
 }
 
-func (h *Hub) Broadcast(msg ResponseMessage) {
+func (h *Hub) Broadcast(msg common.ResponseMessage) {
 	h.broadcast <- msg
 }
 
@@ -134,7 +123,7 @@ func (h *Hub) Broadcast(msg ResponseMessage) {
 // So a message could be send to a browser AND the desktop app.
 // if dedub is false, also all browser tabs of the user will receive the message.
 // if dedub is true, only one browser tab will receive the message (the first one that is found with the matching userID). This is useful for messages that should not be de-duplicated across multiple browser tabs, such as certain push notifications.
-func (h *Hub) SendToUser(userID int64, msg ResponseMessage, dedub bool) {
+func (h *Hub) SendToUser(userID int64, msg common.ResponseMessage, dedub bool) {
 	h.clientsMutex.RLock()
 	defer h.clientsMutex.RUnlock()
 
@@ -203,5 +192,11 @@ func (h *Hub) UpdateClientInfo(conn *Connection, newInfo ClientInfo) {
 
 	if _, ok := h.clients[conn]; ok {
 		h.clients[conn] = newInfo
+	}
+}
+
+func (h *Hub) SendMobilePushNotification(userId int64, title, message, icon string, notification models.PostMessage) {
+	if h.webhook != nil {
+		h.webhook.SendMobilePush(userId, title, message, icon, notification)
 	}
 }

@@ -1,9 +1,11 @@
-package db
+package watcher
 
 import (
 	"context"
 	"database/sql"
 	"log"
+	"push_notification/internal/common"
+	"push_notification/internal/db"
 	"push_notification/internal/hub"
 	"sync"
 	"time"
@@ -12,19 +14,13 @@ import (
 )
 
 type ExportWatcher struct {
-	db     *DB
+	db     *db.DB
 	stopCh chan struct{}
 	wg     sync.WaitGroup
-	hub    WebSocketBroadcaster
+	hub    *hub.Hub
 }
 
-// WebSocketBroadcaster is an interface for broadcasting messages to all clients
-type WebSocketBroadcaster interface {
-	Broadcast(msg hub.ResponseMessage)
-	HasClients() bool
-}
-
-func NewExportWatcher(db *DB, hub WebSocketBroadcaster) *ExportWatcher {
+func NewExportWatcher(db *db.DB, hub *hub.Hub) *ExportWatcher {
 	return &ExportWatcher{
 		db:     db,
 		stopCh: make(chan struct{}),
@@ -89,8 +85,8 @@ func (w *ExportWatcher) checkExportStarted() {
 
 		// Send message to all WebSocket clients
 		if w.hub != nil {
-			w.hub.Broadcast(hub.ResponseMessage{
-				Type:    hub.ResponseExportStatus,
+			w.hub.Broadcast(common.ResponseMessage{
+				Type:    common.ResponseExportStatus,
 				Message: "", // Empty message to keep the payload small
 				Payload: exportRunning,
 			})

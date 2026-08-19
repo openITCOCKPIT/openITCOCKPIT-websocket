@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"push_notification/pkg/models"
 
 	"database/sql"
 
@@ -59,7 +61,13 @@ func NewDBFromMyCnf(path string) (*DB, error) {
 		return nil, err
 	}
 	bunDB := bun.NewDB(sqldb, mysqldialect.New())
-	bunDB.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(false)))
+	debugQuery := false
+
+	if os.Getenv("MYSQL_DEBUG") == "1" {
+		debugQuery = true
+	}
+
+	bunDB.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(debugQuery)))
 	return &DB{Bun: bunDB}, nil
 }
 
@@ -78,4 +86,95 @@ func (db *DB) GetAPIKey(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return s.Value, nil
+}
+
+// GetHostByUUID queries a host by its UUID
+func (db *DB) GetHostByUUID(ctx context.Context, uuid string) (*models.Host, error) {
+	var host models.Host
+	err := db.Bun.NewSelect().
+		Model(&host).
+		Column("host.id", "host.uuid", "host.name", "host.address").
+		Where("host.uuid = ?", uuid).
+		Limit(1).
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &host, nil
+}
+
+// GetServiceByUUID queries a service by its UUID
+func (db *DB) GetServiceByUUID(ctx context.Context, uuid string) (*models.Service, error) {
+	var service models.Service
+	err := db.Bun.NewSelect().
+		Model(&service).
+		Column("service.id", "service.uuid", "service.name", "service.servicetemplate_id").
+		ColumnExpr("IF((service.name IS NULL OR service.name=\"\"), servicetemplate.name, service.name) AS service_name").
+		Join("INNER JOIN servicetemplates AS servicetemplate ON service.servicetemplate_id = servicetemplate.id").
+		Where("service.uuid = ?", uuid).
+		Limit(1).
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &service, nil
+}
+
+func (db *DB) IsMobilePushNotificationRelayEnabled(ctx context.Context) (bool, error) {
+	var relay models.PushNotificationsRelay
+	err := db.Bun.NewSelect().
+		Model(&relay).
+		Where("enabled = ?", true).
+		Limit(1).
+		Scan(ctx)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return false, nil
+		}
+
+		// Serious error occurred, return it
+		return false, err
+	}
+	return relay.Enabled, nil
+}
+
+func (db *DB) GetMobilePushRelay(ctx context.Context) (models.PushNotificationsRelay, error) {
+	var relay models.PushNotificationsRelay
+	err := db.Bun.NewSelect().
+		Model(&relay).
+		Where("enabled = ?", true).
+		Limit(1).
+		Scan(ctx)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			// Return blank default struct if no PushRelay is configured
+			return models.PushNotificationsRelay{
+				Enabled: false,
+			}, nil
+
+		}
+
+		return models.PushNotificationsRelay{}, err
+	}
+	return relay, nil
+}
+
+func (db *DB) GetUserMobileDevices(ctx context.Context, userId int64) ([]models.MobileDevice, error) {
+	var devices []models.MobileDevice
+	err := db.Bun.NewSelect().
+		Model(&devices).
+		Where("user_id = ?", userId).
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
+func (db *DB) DeleteMobileDeviceByDeviceID(ctx context.Context, deviceId string) error {
+	_, err := db.Bun.NewDelete().
+		Model((*models.MobileDevice)(nil)).
+		Where("device_id = ?", deviceId).
+		Exec(ctx)
+	return err
 }

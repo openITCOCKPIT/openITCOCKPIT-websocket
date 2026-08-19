@@ -2,36 +2,171 @@ package webhook
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"push_notification/internal/db"
+	"push_notification/pkg/models"
+	"strconv"
+	"strings"
 )
 
 type WebHookService struct {
-	gateways []string
+	appCtx                   context.Context
+	db                       *db.DB
+	isMobilePushRelayEnabled bool
+	relay                    models.PushNotificationsRelay
+	authKey                  string
 }
 
-func NewWebHookService(gateways []string) *WebHookService {
-	return &WebHookService{gateways: gateways}
-}
+func buildRelayEndpoint(address string, port int) (string, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", fmt.Errorf("relay address is empty")
+	}
 
-func (w *WebHookService) Send(payload interface{}) {
-	data, err := json.Marshal(payload)
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+
+	u, err := url.Parse(address)
 	if err != nil {
-		log.Println("webhook marshal error:", err)
+		return "", fmt.Errorf("invalid relay address %q: %w", address, err)
+	}
+
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("invalid relay host in address %q", address)
+	}
+
+	finalPort := u.Port()
+	if finalPort == "" && port > 0 {
+		finalPort = strconv.Itoa(port)
+	}
+
+	if (u.Scheme == "https" && finalPort == "443") || (u.Scheme == "http" && finalPort == "80") {
+		u.Host = host
+	} else if finalPort != "" {
+		u.Host = net.JoinHostPort(host, finalPort)
+	} else {
+		u.Host = host
+	}
+
+	u.Path = "/notifications/send-notification.json"
+	u.RawQuery = ""
+	u.Fragment = ""
+
+	return u.String(), nil
+}
+
+func NewWebHookService(appCtx context.Context, dbConn *db.DB) (*WebHookService, error) {
+	webHook := &WebHookService{
+		appCtx: appCtx,
+		db:     dbConn,
+	}
+
+	enabled, err := dbConn.IsMobilePushNotificationRelayEnabled(appCtx)
+	if err != nil {
+		return nil, err
+	}
+	webHook.isMobilePushRelayEnabled = enabled
+
+	relay, err := dbConn.GetMobilePushRelay(appCtx)
+	if err != nil {
+		return nil, err
+	}
+	webHook.relay = relay
+
+	return webHook, nil
+}
+
+func (w *WebHookService) IsMobilePushNotificationRelayEnabled() bool {
+	return w.isMobilePushRelayEnabled
+}
+
+// SendMobilePush sends a mobile push notification to all devices of a user using the relay settings.
+// The send is executed in a goroutine for each device.
+func (w *WebHookService) SendMobilePush(userId int64, title, message, icon string, notification models.PostMessage) {
+	if !w.isMobilePushRelayEnabled {
 		return
 	}
-	for _, url := range w.gateways {
-		go func(url string) {
-			resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+
+	devices, err := w.db.GetUserMobileDevices(w.appCtx, userId)
+	if err != nil {
+		log.Printf("Failed to get mobile devices for user %d: %v", userId, err)
+		return
+	}
+
+	endpoint, err := buildRelayEndpoint(w.relay.Address, w.relay.Port)
+	if err != nil {
+		log.Printf("Failed to build relay endpoint: %v", err)
+		return
+	}
+	authKey := w.relay.AuthKey
+
+	for _, device := range devices {
+		data := map[string]interface{}{
+			"title":             title,
+			"body":              message,
+			"token":             device.DeviceID,
+			"type":              notification.Type,
+			"notification_type": notification.NotificationType,
+			"current_state":     notification.State,
+			"host_uuid":         notification.HostUuid,
+			"service_uuid":      notification.ServiceUuid,
+			"user_id":           userId,
+			"auth_key":          authKey,
+		}
+
+		go func(deviceId string) {
+			jsonData, err := json.Marshal(data)
 			if err != nil {
-				log.Printf("webhook POST error to %s: %v", url, err)
+				log.Printf("Failed to marshal push data for device %s: %v", deviceId, err)
+				return
+			}
+
+			req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+			if err != nil {
+				log.Printf("Failed to create request for device %s: %v", deviceId, err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Api-Key", authKey)
+
+			client := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{
+						InsecureSkipVerify: true,
+					},
+				},
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("Failed to send push to device %s: %v", deviceId, err)
 				return
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode >= 300 {
-				log.Printf("webhook POST non-2xx to %s: %d", url, resp.StatusCode)
+
+			if resp.StatusCode == http.StatusGone { // 410
+				// Remove device from DB if gone
+				err := w.db.DeleteMobileDeviceByDeviceID(w.appCtx, deviceId)
+				if err != nil {
+					log.Printf("Failed to delete device %s: %v", deviceId, err)
+				}
 			}
-		}(url)
+
+			if resp.StatusCode != http.StatusOK { // Not 200
+				log.Printf("Failed to send push to device %s: received status code %d", deviceId, resp.StatusCode)
+			}
+		}(device.DeviceID)
 	}
 }
