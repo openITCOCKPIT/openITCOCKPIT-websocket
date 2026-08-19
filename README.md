@@ -55,7 +55,7 @@ https://github.com/openITCOCKPIT/openITCOCKPIT/blob/2fe013afa8b6cec2e74667d634a5
 
 ## Build WebSocket Server
 ```
-go build -o push_notificationd ./cmd/daemon/main.go
+go build -o websocket ./cmd/daemon/main.go
 ```
 
 
