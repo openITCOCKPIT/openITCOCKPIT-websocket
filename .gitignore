@@ -2,3 +2,4 @@ __debug_bin
 __debug_bin*
 send_push_notification
 push_notificationd
+websocket
