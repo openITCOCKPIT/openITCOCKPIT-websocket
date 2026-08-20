@@ -21,11 +21,8 @@ func main() {
 	// Read the address from openITCOCKPIT Server from the environment, in case we run in docker
 	address := "127.0.0.1"
 
-	if os.Getenv("OITC_ADDRESS") == "1" {
-		address = os.Getenv("OITC_ADDRESS")
-		if address == "" {
-			address = "openitcockpit"
-		}
+	if envAddress := os.Getenv("OITC_ADDRESS"); envAddress != "" {
+		address = envAddress
 	}
 
 	url := fmt.Sprintf("http://%s:8083/message", address)

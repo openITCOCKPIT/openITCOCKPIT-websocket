@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -44,14 +45,22 @@ func main() {
 	// The Router will handle incoming HTTP requests for WebSocket connections and message inputs.
 	r := router.NewRouter(appCtx, h, whService, dbConn)
 
+	// Only bind on 127.0.0.1 for traditional deployments (apt or dnf install)
+	listenAddress := "127.0.0.1:8083"
+	if os.Getenv("IS_CONTAINER") == "1" {
+		// We are running in a Docker container, so we have to bind on all interfaces so that the Mod_Gearman container can reach us.
+		// Mod_Gearman will use send_push_notification to send push notifications through THIS server.
+		listenAddress = "0.0.0.0:8083"
+	}
+
 	srv := &http.Server{
-		Addr:    "127.0.0.1:8083",
+		Addr:    listenAddress,
 		Handler: r,
 	}
 
 	// Start the HTTP server in a separate goroutine so that it doesn't block the main thread, allowing us to listen for shutdown signals.
 	go func() {
-		log.Println("Server started on 127.0.0.1:8083")
+		log.Printf("Server started on %s", listenAddress)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("ListenAndServe(): %v", err)
 		}
